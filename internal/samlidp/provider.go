@@ -16,6 +16,7 @@ import (
 const (
 	metadataPath = "/saml/metadata"
 	ssoPath      = "/saml/sso"
+	startPath    = "/saml/start"
 )
 
 // Config contains the stable public identity and signing material of the SAML
@@ -26,11 +27,19 @@ type Config struct {
 	Certificate      *x509.Certificate
 	ServiceProviders saml.ServiceProviderProvider
 	Sessions         saml.SessionProvider
+	// ServiceProviderID names the provider that /saml/start logs in to.
+	ServiceProviderID string
+	// RelayState is passed to that provider verbatim beside the assertion.
+	// Some providers carry their own routing identifiers in it rather than a
+	// return URL, so Bridgit never interprets the value.
+	RelayState string
 }
 
 // Provider exposes Bridgit's SAML identity-provider endpoints.
 type Provider struct {
-	idp *saml.IdentityProvider
+	idp               *saml.IdentityProvider
+	serviceProviderID string
+	relayState        string
 }
 
 // New constructs a SAML identity provider rooted at Config.PublicURL.
@@ -59,7 +68,11 @@ func New(config Config) (*Provider, error) {
 		Logger:                  logger.DefaultLogger,
 	}
 
-	return &Provider{idp: idp}, nil
+	return &Provider{
+		idp:               idp,
+		serviceProviderID: config.ServiceProviderID,
+		relayState:        config.RelayState,
+	}, nil
 }
 
 // Handler serves the IdP metadata and SSO endpoints.
@@ -73,7 +86,25 @@ func (p *Provider) Handler() http.Handler {
 		}
 		p.idp.ServeSSO(w, r)
 	})
+	mux.HandleFunc(startPath, p.serveIDPInitiated)
 	return mux
+}
+
+// serveIDPInitiated begins a login that the service provider cannot begin
+// itself. Providers whose SAML support is identity-provider-initiated only
+// have no endpoint that emits an AuthnRequest, so this endpoint is the entry
+// point: it establishes the bridge session, then delivers an unsolicited
+// assertion by auto-submitting form POST.
+func (p *Provider) serveIDPInitiated(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	if p.serviceProviderID == "" {
+		http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+		return
+	}
+	p.idp.ServeIDPInitiated(w, r, p.serviceProviderID, p.relayState)
 }
 
 // MetadataXML returns the same metadata document served by the HTTP endpoint.

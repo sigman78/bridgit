@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sigman78/bridgit/internal/identity"
 )
 
 // LookupEnv matches os.LookupEnv and makes configuration behavior testable.
@@ -24,6 +26,10 @@ type Settings struct {
 	SAMLCertificateFile string
 	SAMLKeyFile         string
 	SPMetadataFile      string
+	SAMLACSURL          string
+	SAMLRelayState      string
+	SAMLExtraAttributes map[string]string
+	SAMLGroupAllowlist  []identity.GroupRule
 	TransactionTTL      time.Duration
 	SessionTTL          time.Duration
 	LogLevel            string
@@ -76,6 +82,23 @@ func Load(lookup LookupEnv) (Settings, error) {
 		return Settings{}, err
 	}
 
+	settings.SAMLACSURL = optional(lookup, "BRIDGIT_SAML_ACS_URL", "")
+	if settings.SAMLACSURL != "" {
+		acsURL, parseErr := url.Parse(settings.SAMLACSURL)
+		if parseErr != nil || acsURL.Scheme != "https" || acsURL.Host == "" {
+			return Settings{}, errors.New("BRIDGIT_SAML_ACS_URL must be an absolute HTTPS URL")
+		}
+	}
+	settings.SAMLRelayState = optional(lookup, "BRIDGIT_SAML_RELAY_STATE", "")
+	settings.SAMLExtraAttributes, err = attributes(lookup, "BRIDGIT_SAML_EXTRA_ATTRIBUTES")
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.SAMLGroupAllowlist, err = groupRules(lookup, "BRIDGIT_SAML_GROUPS")
+	if err != nil {
+		return Settings{}, err
+	}
+
 	settings.ListenAddr = optional(lookup, "BRIDGIT_LISTEN_ADDR", ":8080")
 	settings.UsernameClaim = optional(lookup, "BRIDGIT_USERNAME_CLAIM", "preferred_username")
 	settings.GroupsClaim = optional(lookup, "BRIDGIT_GROUPS_CLAIM", "groups")
@@ -118,6 +141,73 @@ func optional(lookup LookupEnv, name, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// list reads a comma-separated setting, preserving the administrator's order
+// and dropping empty entries.
+func list(lookup LookupEnv, name string) []string {
+	raw, ok := lookup(name)
+	if !ok {
+		return nil
+	}
+	var values []string
+	for _, entry := range strings.Split(raw, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			values = append(values, entry)
+		}
+	}
+	return values
+}
+
+// attributes reads "name=value" pairs, comma-separated. Values may contain "="
+// so that opaque provider identifiers survive unaltered.
+func attributes(lookup LookupEnv, name string) (map[string]string, error) {
+	entries := list(lookup, name)
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	parsed := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		attributeName, value, found := strings.Cut(entry, "=")
+		attributeName = strings.TrimSpace(attributeName)
+		value = strings.TrimSpace(value)
+		if !found || attributeName == "" || value == "" {
+			return nil, fmt.Errorf("%s entries must be name=value", name)
+		}
+		if _, duplicate := parsed[attributeName]; duplicate {
+			return nil, fmt.Errorf("%s repeats attribute %q", name, attributeName)
+		}
+		parsed[attributeName] = value
+	}
+	return parsed, nil
+}
+
+// groupRules reads ordered "upstreamGroup" or "upstreamGroup=providerGroup"
+// entries. The bare form means the two names are the same.
+func groupRules(lookup LookupEnv, name string) ([]identity.GroupRule, error) {
+	entries := list(lookup, name)
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	rules := make([]identity.GroupRule, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		match, emit, mapped := strings.Cut(entry, "=")
+		match = strings.TrimSpace(match)
+		if !mapped {
+			emit = match
+		}
+		emit = strings.TrimSpace(emit)
+		if match == "" || emit == "" {
+			return nil, fmt.Errorf("%s entries must be group or group=providerGroup", name)
+		}
+		if _, duplicate := seen[match]; duplicate {
+			return nil, fmt.Errorf("%s repeats group %q", name, match)
+		}
+		seen[match] = struct{}{}
+		rules = append(rules, identity.GroupRule{Match: match, Emit: emit})
+	}
+	return rules, nil
 }
 
 func duration(lookup LookupEnv, name string, fallback time.Duration) (time.Duration, error) {
