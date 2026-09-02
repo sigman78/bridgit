@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"sort"
 	"time"
 
 	"github.com/crewjam/saml"
@@ -32,15 +33,26 @@ type Config struct {
 	ServiceProviderMetadata []byte
 	TransactionTTL          time.Duration
 	SessionTTL              time.Duration
+	// RelayState accompanies every identity-provider-initiated assertion.
+	RelayState string
+	// ExtraAttributes are constant assertion attributes that identify this
+	// bridge to the service provider, beside the per-user attributes.
+	ExtraAttributes map[string]string
+	// GroupAllowlist, when set, is the ordered set of groups this service
+	// provider accepts. The first entry the user holds becomes their single
+	// group; a user holding none is refused. Empty passes every group through.
+	GroupAllowlist []string
 }
 
 // Server orchestrates the browser flow between the two protocol adapters.
 type Server struct {
-	oidc           *oidcclient.Client
-	state          *session.Memory
-	transactionTTL time.Duration
-	sessionTTL     time.Duration
-	handler        http.Handler
+	oidc            *oidcclient.Client
+	state           *session.Memory
+	transactionTTL  time.Duration
+	sessionTTL      time.Duration
+	extraAttributes []saml.Attribute
+	groupAllowlist  []string
+	handler         http.Handler
 }
 
 // New constructs the complete Bridgit HTTP handler.
@@ -60,17 +72,21 @@ func New(config Config, oidc *oidcclient.Client) (*Server, error) {
 	}
 
 	bridge := &Server{
-		oidc:           oidc,
-		state:          session.NewMemory(time.Now),
-		transactionTTL: config.TransactionTTL,
-		sessionTTL:     config.SessionTTL,
+		oidc:            oidc,
+		state:           session.NewMemory(time.Now),
+		transactionTTL:  config.TransactionTTL,
+		sessionTTL:      config.SessionTTL,
+		extraAttributes: staticAttributes(config.ExtraAttributes),
+		groupAllowlist:  append([]string(nil), config.GroupAllowlist...),
 	}
 	provider, err := samlidp.New(samlidp.Config{
-		PublicURL:        config.PublicURL,
-		Key:              config.SAMLKey,
-		Certificate:      config.SAMLCertificate,
-		ServiceProviders: registry,
-		Sessions:         bridge,
+		PublicURL:         config.PublicURL,
+		Key:               config.SAMLKey,
+		Certificate:       config.SAMLCertificate,
+		ServiceProviders:  registry,
+		Sessions:          bridge,
+		ServiceProviderID: registry.EntityID(),
+		RelayState:        config.RelayState,
 	})
 	if err != nil {
 		return nil, err
@@ -195,11 +211,20 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request, authnRequest
 	}
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		if bridgeSession, ok := s.state.GetSession(cookie.Value); ok {
-			if !s.state.UseSAMLRequest(authnRequest.Request.ID, time.Now().Add(saml.MaxIssueDelay)) {
+			// An identity-provider-initiated login has no AuthnRequest, so
+			// there is no request ID to spend. Replay protection applies to
+			// the service-provider-initiated path, which does have one.
+			if authnRequest.Request.ID != "" &&
+				!s.state.UseSAMLRequest(authnRequest.Request.ID, time.Now().Add(saml.MaxIssueDelay)) {
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return nil
 			}
-			return samlSession(bridgeSession)
+			samlAssertionSession := s.samlSession(bridgeSession)
+			if samlAssertionSession == nil {
+				http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+				return nil
+			}
+			return samlAssertionSession
 		}
 	}
 	state, err := randomString(32)
@@ -270,10 +295,16 @@ func cookieSeconds(ttl time.Duration) int {
 	return seconds
 }
 
-func samlSession(bridgeSession session.BridgeSession) *saml.Session {
+// samlSession renders a bridge session as an assertion session, or nil when
+// the user holds no group this service provider accepts.
+func (s *Server) samlSession(bridgeSession session.BridgeSession) *saml.Session {
 	principal := bridgeSession.Principal
-	groupValues := make([]saml.AttributeValue, 0, len(principal.Groups))
-	for _, group := range principal.Groups {
+	groups := selectGroups(principal.Groups, s.groupAllowlist)
+	if groups == nil {
+		return nil
+	}
+	groupValues := make([]saml.AttributeValue, 0, len(groups))
+	for _, group := range groups {
 		groupValues = append(groupValues, saml.AttributeValue{Type: "xs:string", Value: group})
 	}
 	return &saml.Session{
@@ -283,7 +314,7 @@ func samlSession(bridgeSession session.BridgeSession) *saml.Session {
 		Index:        bridgeSession.SAMLSessionIndex,
 		NameID:       principal.Subject,
 		NameIDFormat: string(saml.PersistentNameIDFormat),
-		CustomAttributes: []saml.Attribute{
+		CustomAttributes: append([]saml.Attribute{
 			{
 				FriendlyName: "username",
 				Name:         "username",
@@ -296,8 +327,46 @@ func samlSession(bridgeSession session.BridgeSession) *saml.Session {
 				NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
 				Values:       groupValues,
 			},
-		},
+		}, s.extraAttributes...),
 	}
+}
+
+// selectGroups reduces the user's groups to the one this service provider
+// should see. A provider that resolves exactly one group per assertion fails
+// its lookup when handed several, so an allowlist both authorizes the login
+// and makes precedence explicit: earlier entries win.
+func selectGroups(groups, allowlist []string) []string {
+	if len(allowlist) == 0 {
+		return groups
+	}
+	for _, allowed := range allowlist {
+		for _, group := range groups {
+			if group == allowed {
+				return []string{group}
+			}
+		}
+	}
+	return nil
+}
+
+// staticAttributes renders constant attributes in a stable order, so that two
+// assertions for the same user differ only where they are meant to.
+func staticAttributes(values map[string]string) []saml.Attribute {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	attributes := make([]saml.Attribute, 0, len(names))
+	for _, name := range names {
+		attributes = append(attributes, saml.Attribute{
+			FriendlyName: name,
+			Name:         name,
+			NameFormat:   "urn:oasis:names:tc:SAML:2.0:attrname-format:basic",
+			Values:       []saml.AttributeValue{{Type: "xs:string", Value: values[name]}},
+		})
+	}
+	return attributes
 }
 
 func randomString(byteCount int) (string, error) {

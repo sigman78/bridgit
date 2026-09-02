@@ -14,6 +14,7 @@ import (
 // Registry is an immutable allowlist of SAML service providers.
 type Registry struct {
 	providers map[string]*saml.EntityDescriptor
+	entityID  string
 }
 
 // NewRegistry parses and validates one service-provider metadata document.
@@ -41,7 +42,17 @@ func NewRegistry(metadataXML []byte) (*Registry, error) {
 	if acsCount == 0 {
 		return nil, errors.New("SAML service-provider metadata has no assertion consumer service")
 	}
-	return &Registry{providers: map[string]*saml.EntityDescriptor{metadata.EntityID: &metadata}}, nil
+	return &Registry{
+		providers: map[string]*saml.EntityDescriptor{metadata.EntityID: &metadata},
+		entityID:  metadata.EntityID,
+	}, nil
+}
+
+// EntityID returns the entity ID of the single registered service provider.
+// An identity-provider-initiated login has no AuthnRequest to name its
+// destination, so the provider is selected from the registry instead.
+func (r *Registry) EntityID() string {
+	return r.entityID
 }
 
 // GetServiceProvider returns metadata only for an explicitly registered entity.

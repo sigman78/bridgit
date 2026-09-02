@@ -43,6 +43,9 @@ func New(ctx context.Context, settings config.Settings) (*server.Server, error) 
 		ServiceProviderMetadata: metadata,
 		TransactionTTL:          settings.TransactionTTL,
 		SessionTTL:              settings.SessionTTL,
+		RelayState:              settings.SAMLRelayState,
+		ExtraAttributes:         settings.SAMLExtraAttributes,
+		GroupAllowlist:          settings.SAMLGroupAllowlist,
 	}, oidc)
 }
 

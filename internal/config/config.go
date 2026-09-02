@@ -24,6 +24,9 @@ type Settings struct {
 	SAMLCertificateFile string
 	SAMLKeyFile         string
 	SPMetadataFile      string
+	SAMLRelayState      string
+	SAMLExtraAttributes map[string]string
+	SAMLGroupAllowlist  []string
 	TransactionTTL      time.Duration
 	SessionTTL          time.Duration
 	LogLevel            string
@@ -76,6 +79,13 @@ func Load(lookup LookupEnv) (Settings, error) {
 		return Settings{}, err
 	}
 
+	settings.SAMLRelayState = optional(lookup, "BRIDGIT_SAML_RELAY_STATE", "")
+	settings.SAMLExtraAttributes, err = attributes(lookup, "BRIDGIT_SAML_EXTRA_ATTRIBUTES")
+	if err != nil {
+		return Settings{}, err
+	}
+	settings.SAMLGroupAllowlist = list(lookup, "BRIDGIT_SAML_GROUPS")
+
 	settings.ListenAddr = optional(lookup, "BRIDGIT_LISTEN_ADDR", ":8080")
 	settings.UsernameClaim = optional(lookup, "BRIDGIT_USERNAME_CLAIM", "preferred_username")
 	settings.GroupsClaim = optional(lookup, "BRIDGIT_GROUPS_CLAIM", "groups")
@@ -118,6 +128,45 @@ func optional(lookup LookupEnv, name, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// list reads a comma-separated setting, preserving the administrator's order
+// and dropping empty entries.
+func list(lookup LookupEnv, name string) []string {
+	raw, ok := lookup(name)
+	if !ok {
+		return nil
+	}
+	var values []string
+	for _, entry := range strings.Split(raw, ",") {
+		if entry = strings.TrimSpace(entry); entry != "" {
+			values = append(values, entry)
+		}
+	}
+	return values
+}
+
+// attributes reads "name=value" pairs, comma-separated. Values may contain "="
+// so that opaque provider identifiers survive unaltered.
+func attributes(lookup LookupEnv, name string) (map[string]string, error) {
+	entries := list(lookup, name)
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	parsed := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		attributeName, value, found := strings.Cut(entry, "=")
+		attributeName = strings.TrimSpace(attributeName)
+		value = strings.TrimSpace(value)
+		if !found || attributeName == "" || value == "" {
+			return nil, fmt.Errorf("%s entries must be name=value", name)
+		}
+		if _, duplicate := parsed[attributeName]; duplicate {
+			return nil, fmt.Errorf("%s repeats attribute %q", name, attributeName)
+		}
+		parsed[attributeName] = value
+	}
+	return parsed, nil
 }
 
 func duration(lookup LookupEnv, name string, fallback time.Duration) (time.Duration, error) {
