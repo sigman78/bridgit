@@ -3,6 +3,8 @@ package config
 import (
 	"testing"
 	"time"
+
+	"github.com/sigman78/bridgit/internal/identity"
 )
 
 func TestLoadAcceptsCompleteProductionEnvironmentAndAppliesDefaults(t *testing.T) {
@@ -87,7 +89,7 @@ func TestLoadParsesIdentityProviderInitiatedSettings(t *testing.T) {
 	environment := baseEnvironment()
 	environment["BRIDGIT_SAML_RELAY_STATE"] = "cmVzb3VyY2UxX29tYWRhMQ=="
 	environment["BRIDGIT_SAML_EXTRA_ATTRIBUTES"] = "resource_attribute=resource1, omada_attribute=omada1"
-	environment["BRIDGIT_SAML_GROUPS"] = "omada-admins, omada-viewers"
+	environment["BRIDGIT_SAML_GROUPS"] = "omada_admins=omada-admins, omada-viewers"
 
 	settings, err := Load(lookupFrom(environment))
 	if err != nil {
@@ -102,9 +104,13 @@ func TestLoadParsesIdentityProviderInitiatedSettings(t *testing.T) {
 	if got, want := settings.SAMLExtraAttributes["omada_attribute"], "omada1"; got != want {
 		t.Errorf("omada_attribute = %q, want %q", got, want)
 	}
-	// Order is the administrator's stated precedence, so it must survive.
-	if got := settings.SAMLGroupAllowlist; len(got) != 2 || got[0] != "omada-admins" || got[1] != "omada-viewers" {
-		t.Errorf("group allowlist = %v, want [omada-admins omada-viewers]", got)
+	// Order is the administrator's stated precedence, so it must survive; the
+	// bare form means the two namespaces agree on the name.
+	got := settings.SAMLGroupAllowlist
+	if len(got) != 2 ||
+		got[0] != (identity.GroupRule{Match: "omada_admins", Emit: "omada-admins"}) ||
+		got[1] != (identity.GroupRule{Match: "omada-viewers", Emit: "omada-viewers"}) {
+		t.Errorf("group allowlist = %v", got)
 	}
 }
 
@@ -150,6 +156,22 @@ func TestLoadRejectsMalformedExtraAttributes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			environment := baseEnvironment()
 			environment["BRIDGIT_SAML_EXTRA_ATTRIBUTES"] = value
+			if _, err := Load(lookupFrom(environment)); err == nil {
+				t.Fatalf("Load() accepted %q", value)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsMalformedGroupRules(t *testing.T) {
+	for name, value := range map[string]string{
+		"empty provider group": "omada_admins=",
+		"empty upstream group": "=omada-admins",
+		"duplicate upstream":   "a=x, a=y",
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := baseEnvironment()
+			environment["BRIDGIT_SAML_GROUPS"] = value
 			if _, err := Load(lookupFrom(environment)); err == nil {
 				t.Fatalf("Load() accepted %q", value)
 			}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/crewjam/saml"
+	"github.com/sigman78/bridgit/internal/identity"
 	"github.com/sigman78/bridgit/internal/oidcclient"
 )
 
@@ -80,7 +81,10 @@ func TestIdentityProviderInitiatedLoginCanBeRepeated(t *testing.T) {
 // cannot be handed several.
 func TestGroupAllowlistNarrowsTheAssertionToOneGroup(t *testing.T) {
 	harness := idpInitiatedBridge(t, func(config *Config) {
-		config.GroupAllowlist = []string{"omada-viewers", "omada-admins"}
+		config.GroupAllowlist = []identity.GroupRule{
+			{Match: "omada-viewers", Emit: "omada-viewers"},
+			{Match: "omada-admins", Emit: "omada-admins"},
+		}
 	})
 
 	response := harness.start(t)
@@ -98,7 +102,7 @@ func TestGroupAllowlistNarrowsTheAssertionToOneGroup(t *testing.T) {
 // a user holding no accepted group never receives an assertion at all.
 func TestGroupAllowlistRefusesAnUnlistedUser(t *testing.T) {
 	harness := idpInitiatedBridge(t, func(config *Config) {
-		config.GroupAllowlist = []string{"omada-operators"}
+		config.GroupAllowlist = []identity.GroupRule{{Match: "omada-operators", Emit: "omada-operators"}}
 	})
 
 	response := harness.start(t)
@@ -135,6 +139,25 @@ func TestACSOverrideSendsTheAssertionToTheReachableAddress(t *testing.T) {
 	// Destination has to follow the override, or a strict service provider
 	// rejects the assertion it just received.
 	harness.parseAssertion(t, body)
+}
+
+// TestGroupIsRenamedForTheServiceProvider is the case that broke the first
+// live login: Pocket ID slugifies group names, so the upstream reports
+// omada_admins while the controller's own user group is omada-admins.
+func TestGroupIsRenamedForTheServiceProvider(t *testing.T) {
+	harness := idpInitiatedBridge(t, func(config *Config) {
+		config.GroupAllowlist = []identity.GroupRule{{Match: "omada-admins", Emit: "omada_renamed"}}
+	})
+
+	response := harness.start(t)
+	if response.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	assertion := harness.parseAssertion(t, response.Body.String())
+	groups := attributeValues(assertion, "usergroup_name")
+	if len(groups) != 1 || groups[0] != "omada_renamed" {
+		t.Errorf("usergroup_name = %v, want exactly [omada_renamed]", groups)
+	}
 }
 
 func TestIdentityProviderInitiatedEndpointRejectsNonGET(t *testing.T) {

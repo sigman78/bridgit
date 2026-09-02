@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewjam/saml"
+	"github.com/sigman78/bridgit/internal/identity"
 	"github.com/sigman78/bridgit/internal/oidcclient"
 	"github.com/sigman78/bridgit/internal/samlidp"
 	"github.com/sigman78/bridgit/internal/session"
@@ -42,9 +43,10 @@ type Config struct {
 	// service-provider metadata advertises.
 	ACSURL string
 	// GroupAllowlist, when set, is the ordered set of groups this service
-	// provider accepts. The first entry the user holds becomes their single
-	// group; a user holding none is refused. Empty passes every group through.
-	GroupAllowlist []string
+	// provider accepts, each naming the group to send in its place. The first
+	// rule the user matches becomes their single group; a user matching none
+	// is refused. Empty passes every group through.
+	GroupAllowlist []identity.GroupRule
 }
 
 // Server orchestrates the browser flow between the two protocol adapters.
@@ -54,7 +56,7 @@ type Server struct {
 	transactionTTL  time.Duration
 	sessionTTL      time.Duration
 	extraAttributes []saml.Attribute
-	groupAllowlist  []string
+	groupAllowlist  []identity.GroupRule
 	handler         http.Handler
 }
 
@@ -80,7 +82,7 @@ func New(config Config, oidc *oidcclient.Client) (*Server, error) {
 		transactionTTL:  config.TransactionTTL,
 		sessionTTL:      config.SessionTTL,
 		extraAttributes: staticAttributes(config.ExtraAttributes),
-		groupAllowlist:  append([]string(nil), config.GroupAllowlist...),
+		groupAllowlist:  append([]identity.GroupRule(nil), config.GroupAllowlist...),
 	}
 	provider, err := samlidp.New(samlidp.Config{
 		PublicURL:         config.PublicURL,
@@ -336,18 +338,14 @@ func (s *Server) samlSession(bridgeSession session.BridgeSession) *saml.Session 
 
 // selectGroups reduces the user's groups to the one this service provider
 // should see. A provider that resolves exactly one group per assertion fails
-// its lookup when handed several, so an allowlist both authorizes the login
+// its lookup when handed several, so the allowlist both authorizes the login
 // and makes precedence explicit: earlier entries win.
-func selectGroups(groups, allowlist []string) []string {
-	if len(allowlist) == 0 {
+func selectGroups(groups []string, rules []identity.GroupRule) []string {
+	if len(rules) == 0 {
 		return groups
 	}
-	for _, allowed := range allowlist {
-		for _, group := range groups {
-			if group == allowed {
-				return []string{group}
-			}
-		}
+	if selected, ok := identity.SelectGroup(groups, rules); ok {
+		return []string{selected}
 	}
 	return nil
 }

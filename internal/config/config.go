@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sigman78/bridgit/internal/identity"
 )
 
 // LookupEnv matches os.LookupEnv and makes configuration behavior testable.
@@ -27,7 +29,7 @@ type Settings struct {
 	SAMLACSURL          string
 	SAMLRelayState      string
 	SAMLExtraAttributes map[string]string
-	SAMLGroupAllowlist  []string
+	SAMLGroupAllowlist  []identity.GroupRule
 	TransactionTTL      time.Duration
 	SessionTTL          time.Duration
 	LogLevel            string
@@ -92,7 +94,10 @@ func Load(lookup LookupEnv) (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
-	settings.SAMLGroupAllowlist = list(lookup, "BRIDGIT_SAML_GROUPS")
+	settings.SAMLGroupAllowlist, err = groupRules(lookup, "BRIDGIT_SAML_GROUPS")
+	if err != nil {
+		return Settings{}, err
+	}
 
 	settings.ListenAddr = optional(lookup, "BRIDGIT_LISTEN_ADDR", ":8080")
 	settings.UsernameClaim = optional(lookup, "BRIDGIT_USERNAME_CLAIM", "preferred_username")
@@ -175,6 +180,34 @@ func attributes(lookup LookupEnv, name string) (map[string]string, error) {
 		parsed[attributeName] = value
 	}
 	return parsed, nil
+}
+
+// groupRules reads ordered "upstreamGroup" or "upstreamGroup=providerGroup"
+// entries. The bare form means the two names are the same.
+func groupRules(lookup LookupEnv, name string) ([]identity.GroupRule, error) {
+	entries := list(lookup, name)
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	rules := make([]identity.GroupRule, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		match, emit, mapped := strings.Cut(entry, "=")
+		match = strings.TrimSpace(match)
+		if !mapped {
+			emit = match
+		}
+		emit = strings.TrimSpace(emit)
+		if match == "" || emit == "" {
+			return nil, fmt.Errorf("%s entries must be group or group=providerGroup", name)
+		}
+		if _, duplicate := seen[match]; duplicate {
+			return nil, fmt.Errorf("%s repeats group %q", name, match)
+		}
+		seen[match] = struct{}{}
+		rules = append(rules, identity.GroupRule{Match: match, Emit: emit})
+	}
+	return rules, nil
 }
 
 func duration(lookup LookupEnv, name string, fallback time.Duration) (time.Duration, error) {

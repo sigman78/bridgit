@@ -94,7 +94,9 @@ Bridgit listens on plain HTTP by design and should sit behind the homelab TLS re
 
 Start the login at `GET /saml/start`. Omada's SAML support is identity-provider-initiated only: it has no endpoint that emits an AuthnRequest, so nothing in its UI can begin a login and `/saml/sso` is never reached. Point a link or a reverse-proxy redirect at `/saml/start` instead; browsing directly to `/saml/sso` does not start a login.
 
-A Pocket ID user must hold at least one group, and the group Bridgit sends must exactly match an Omada SAML user-group name. Omada resolves exactly one group per assertion, so set `BRIDGIT_SAML_GROUPS` whenever users can hold more than one. See [SETUP.md](SETUP.md) before testing.
+A Pocket ID user must hold at least one group, and the group Bridgit sends must exactly match an Omada SAML user-group name. Omada resolves exactly one group per assertion, so set `BRIDGIT_SAML_GROUPS` whenever users can hold more than one.
+
+Note that Pocket ID slugifies group names: a group displayed as `omada-admins` is reported in the claim as `omada_admins`. Use the `group=providerGroup` form to bridge the two namespaces rather than renaming either side. See [SETUP.md](SETUP.md) before testing.
 
 ## Configuration
 
@@ -111,7 +113,7 @@ A Pocket ID user must hold at least one group, and the group Bridgit sends must 
 | `BRIDGIT_SAML_ACS_URL` | no | — | Overrides the assertion consumer address the SP metadata advertises. Omada derives its published URL from its own Controller Hostname/IP plus management port, which is not the reverse-proxy address browsers use |
 | `BRIDGIT_SAML_RELAY_STATE` | no | — | Opaque `RelayState` sent with every `/saml/start` assertion. Omada requires URL-safe base64 of `ResourceID_OmadaID` |
 | `BRIDGIT_SAML_EXTRA_ATTRIBUTES` | no | — | Constant assertion attributes, `name=value` comma-separated (Omada: `resource_attribute`, `omada_attribute`) |
-| `BRIDGIT_SAML_GROUPS` | no | — | Ordered allowlist; the first group a user holds becomes their only group. A user holding none is refused. Empty passes all groups through |
+| `BRIDGIT_SAML_GROUPS` | no | — | Ordered allowlist of `group` or `group=providerGroup`; the first rule a user matches supplies their only group. A user matching none is refused. Empty passes all groups through |
 | `BRIDGIT_USERNAME_CLAIM` | no | `preferred_username` | OIDC claim mapped to `username` |
 | `BRIDGIT_GROUPS_CLAIM` | no | `groups` | String-array OIDC claim mapped to `usergroup_name` |
 | `BRIDGIT_TRANSACTION_TTL` | no | `1m` | OIDC continuation lifetime; maximum `90s` |
