@@ -27,7 +27,7 @@ func TestIdentityProviderInitiatedLoginIssuesUnsolicitedAssertion(t *testing.T) 
 		t.Fatalf("start status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
 	}
 	body := response.Body.String()
-	if !strings.Contains(body, harness.serviceProvider.AcsURL.String()) {
+	if !strings.Contains(body, harness.acsURL) {
 		t.Errorf("auto-submitted form does not post to the service provider ACS; body=%s", body)
 	}
 	if got, want := hiddenFormValue(t, body, "RelayState"), "cmVzb3VyY2UxX29tYWRhMQ=="; got != want {
@@ -110,6 +110,33 @@ func TestGroupAllowlistRefusesAnUnlistedUser(t *testing.T) {
 	}
 }
 
+// TestACSOverrideSendsTheAssertionToTheReachableAddress covers a service
+// provider that advertises an address browsers cannot reach. Omada derives its
+// published assertion consumer from its own host settings and appends its
+// management port, so the metadata names a direct port rather than the reverse
+// proxy the browser actually uses.
+func TestACSOverrideSendsTheAssertionToTheReachableAddress(t *testing.T) {
+	const reachable = "https://omada.example.test/sso/saml/login"
+	advertisedACS := testServiceProvider(t).AcsURL.String()
+	harness := idpInitiatedBridge(t, func(config *Config) {
+		config.ACSURL = reachable
+	})
+	response := harness.start(t)
+	if response.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	body := response.Body.String()
+	if !strings.Contains(body, reachable) {
+		t.Errorf("form does not post to the override; body=%s", body)
+	}
+	if strings.Contains(body, advertisedACS) {
+		t.Errorf("form still references the advertised address; body=%s", body)
+	}
+	// Destination has to follow the override, or a strict service provider
+	// rejects the assertion it just received.
+	harness.parseAssertion(t, body)
+}
+
 func TestIdentityProviderInitiatedEndpointRejectsNonGET(t *testing.T) {
 	harness := idpInitiatedBridge(t, nil)
 	request := httptest.NewRequest(http.MethodPost, "https://bridge.example.test/saml/start", nil)
@@ -124,6 +151,7 @@ func TestIdentityProviderInitiatedEndpointRejectsNonGET(t *testing.T) {
 type idpInitiatedTestBridge struct {
 	bridge          http.Handler
 	serviceProvider *saml.ServiceProvider
+	acsURL          string
 	sessionCookie   *http.Cookie
 }
 
@@ -144,7 +172,7 @@ func (h idpInitiatedTestBridge) parseAssertion(t *testing.T, body string) *saml.
 		"SAMLResponse": {hiddenFormValue(t, body, "SAMLResponse")},
 		"RelayState":   {hiddenFormValue(t, body, "RelayState")},
 	}
-	request := httptest.NewRequest(http.MethodPost, h.serviceProvider.AcsURL.String(), strings.NewReader(form.Encode()))
+	request := httptest.NewRequest(http.MethodPost, h.acsURL, strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if err := request.ParseForm(); err != nil {
 		t.Fatal(err)
@@ -231,9 +259,20 @@ func idpInitiatedBridge(t *testing.T, configure func(*Config)) idpInitiatedTestB
 	if got, want := callbackResponse.Header().Get("Location"), "/saml/start"; got != want {
 		t.Fatalf("callback returned to %q, want %q", got, want)
 	}
+	acsURL := config.ACSURL
+	if acsURL == "" {
+		acsURL = serviceProvider.AcsURL.String()
+	} else {
+		// Metadata was marshalled above with the advertised address; the
+		// provider itself validates against where delivery actually happens.
+		// Omada is laxer than this library -- it reads only NotOnOrAfter from
+		// SubjectConfirmationData -- so this is the stricter of the two cases.
+		serviceProvider.AcsURL = *mustURL(t, acsURL)
+	}
 	return idpInitiatedTestBridge{
 		bridge:          bridge,
 		serviceProvider: serviceProvider,
+		acsURL:          acsURL,
 		sessionCookie:   namedCookie(t, callbackResponse.Result().Cookies(), sessionCookieName),
 	}
 }

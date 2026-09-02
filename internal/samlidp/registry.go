@@ -18,7 +18,12 @@ type Registry struct {
 }
 
 // NewRegistry parses and validates one service-provider metadata document.
-func NewRegistry(metadataXML []byte) (*Registry, error) {
+//
+// acsURL, when set, replaces the assertion consumer service the document
+// advertises. A service provider behind a reverse proxy may publish an
+// address that is derived from its own host settings rather than the one
+// browsers can actually reach, and the assertion is delivered by the browser.
+func NewRegistry(metadataXML []byte, acsURL string) (*Registry, error) {
 	var metadata saml.EntityDescriptor
 	if err := xml.Unmarshal(metadataXML, &metadata); err != nil {
 		return nil, fmt.Errorf("parse SAML service-provider metadata: %w", err)
@@ -41,6 +46,22 @@ func NewRegistry(metadataXML []byte) (*Registry, error) {
 	}
 	if acsCount == 0 {
 		return nil, errors.New("SAML service-provider metadata has no assertion consumer service")
+	}
+	if acsURL != "" {
+		location, err := url.Parse(acsURL)
+		if err != nil || location.Scheme != "https" || location.Host == "" {
+			return nil, fmt.Errorf("SAML ACS override %q must be an absolute HTTPS URL", acsURL)
+		}
+		isDefault := true
+		for descriptorIndex := range metadata.SPSSODescriptors {
+			metadata.SPSSODescriptors[descriptorIndex].AssertionConsumerServices =
+				[]saml.IndexedEndpoint{{
+					Binding:   saml.HTTPPostBinding,
+					Location:  acsURL,
+					Index:     0,
+					IsDefault: &isDefault,
+				}}
+		}
 	}
 	return &Registry{
 		providers: map[string]*saml.EntityDescriptor{metadata.EntityID: &metadata},

@@ -124,6 +124,22 @@ func TestLoadDefaultsIdentityProviderInitiatedSettingsToUnset(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsANonHTTPSACSOverride(t *testing.T) {
+	for name, value := range map[string]string{
+		"plain http": "http://omada.example.test/sso/saml/login",
+		"no host":    "https:///sso/saml/login",
+		"not a URL":  "::not a url::",
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := baseEnvironment()
+			environment["BRIDGIT_SAML_ACS_URL"] = value
+			if _, err := Load(lookupFrom(environment)); err == nil {
+				t.Fatalf("Load() accepted %q", value)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsMalformedExtraAttributes(t *testing.T) {
 	for name, value := range map[string]string{
 		"missing separator": "resource_attribute",

@@ -108,6 +108,7 @@ A Pocket ID user must hold at least one group, and the group Bridgit sends must 
 | `BRIDGIT_SAML_CERT_FILE` | yes | — | PEM signing certificate |
 | `BRIDGIT_SAML_KEY_FILE` | yes | — | Matching RSA private key, at least 2048 bits |
 | `BRIDGIT_SAML_SP_METADATA_FILE` | yes | — | Omada-exported SP metadata XML |
+| `BRIDGIT_SAML_ACS_URL` | no | — | Overrides the assertion consumer address the SP metadata advertises. Omada derives its published URL from its own Controller Hostname/IP plus management port, which is not the reverse-proxy address browsers use |
 | `BRIDGIT_SAML_RELAY_STATE` | no | — | Opaque `RelayState` sent with every `/saml/start` assertion. Omada requires URL-safe base64 of `ResourceID_OmadaID` |
 | `BRIDGIT_SAML_EXTRA_ATTRIBUTES` | no | — | Constant assertion attributes, `name=value` comma-separated (Omada: `resource_attribute`, `omada_attribute`) |
 | `BRIDGIT_SAML_GROUPS` | no | — | Ordered allowlist; the first group a user holds becomes their only group. A user holding none is refused. Empty passes all groups through |

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" ID="CJBfNeBG3bnBKMq92tf-qBlgkVU" cacheDuration="PT1440M" entityID="https://172.18.0.1:8043/597eabbd5b22e870bcd5dca776fe8d73">
+    <md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol">
+        <md:KeyDescriptor use="signing">
+            <ds:KeyInfo xmlns:ds="http://www.w3.org/2000/09/xmldsig#">
+                <ds:X509Data>
+                    <ds:X509Certificate>
+      
+        
+          MIIEKTCCApGgAwIBAgIUJSUiZzXzL7o0cvctuORd9YpN76QwDQYJKoZIhvcNAQELBQAwJDEiMCAGA1UEAwwZYnJpZGdpdC5ob3N0ZXIuaW91cGcubGluazAeFw0yNjA5MDIwNjQyMTZaFw0zNjA4MzAwNjQyMTZaMCQxIjAgBgNVBAMMGWJyaWRnaXQuaG9zdGVyLmlvdXBnLmxpbmswggGiMA0GCSqGSIb3DQEBAQUAA4IBjwAwggGKAoIBgQCfPdUxnZ94G0pXSyU4E4vT37RywfFfGBC9Y4jZFleTWO22z1BGGQ1RsOlTu02//N8wSinMn7vzSiTRX+p+2zhNPve4ZS8a/EiXVWw3CVU1fONUJl1uvtyNhmZvS1GcB778+dgeaINzDCHlrKKwYHU66iLbyswsplNzxtiYU9HNChplZ8EFXQmrkxl5ziSyj5AOE1f5dhTBEeuTmp1vFIv+anbzN78L6PPK3a0wOiwt/vALUv+5evzXSmsxN9V0mPzEp3o84A/q4DLxjGQIf7VwDJt9IsQugYM30jnIgCLPI/htEvL09dZ8YcFr8yGgFQZ8AaOYrw7DpTKKAmVH8pfqN/PdT3CV1wMX1CDrKbai5RlLxQ/7GDg7WHRaKgujNxy3WRemEycD/t82ZKbFmnvCeQmH66vwOJYfmWdyYB0vaTJnBfOgLgdzz+2IPvyJ3jCGGDUq3PuTsDePJj3hBtStRMyeywLDOtAjhUx1LDRqm2EGRZUner1aiBzFAPcoxCsCAwEAAaNTMFEwHQYDVR0OBBYEFCUjxHF8aljZzbf4dPi0xuPg1hJnMB8GA1UdIwQYMBaAFCUjxHF8aljZzbf4dPi0xuPg1hJnMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggGBAH5IiGfWiodXuQuLBFBWs8cKa0xdJ8suF9yH+bs0BOG8OCPm0E3nenxi5hVQsLtJiMtyPyNcBD42f2bVY14N4vH+3NMV46OzPT8aHn2QyeXeiMJwV9UGv/LHnIYdlrd8KY9gWR2BmNVL/jpAi5P8GA3q6Ty2SS1PiCTkjVMv4ZY/gKBH69rBJ4RSbQHQid9iBSGW3ApUZvFLc97zQGqvP6GWr5LWsqudMJZUzphEhH/hh7mIK6OFj/+tLqxRQv956aV66B6VYxq2YzXXvQ5t60wRSmQBkdrmS7S+K1Egfi8p0V5fcGcWQ5qRkyNuPgLdz6hmjQ3Q6tHvWrIFYXP7H8HMOrSI3IKwq4MwlcJ2VsijSquFaI5tsEr1t9xkSrfka4mp8b+Zh7+/6WaiA5lwI/9Juiashl0gGFySYqLV0oxBASfhaRCxcsDVVAAmXIsUuhQt+2NYCII7pSsoe3QsSJfDArZ6F1btQdqn2D4WnlZyQBZl+bTtMhBDrc7FQjshMQ==
+        
+      
+      
+      
+      
+      
+    </ds:X509Certificate>
+                </ds:X509Data>
+            </ds:KeyInfo>
+        </md:KeyDescriptor>
+        <md:AssertionConsumerService index="0" Location="https://172.18.0.1:8043/sso/saml/login" Binding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" isDefault="true"/>
+        <md:AttributeConsumingService index="0">
+            <md:ServiceName xml:lang="en">AttributeContract</md:ServiceName>
+            <md:RequestedAttribute Name="resource_attribute"/>
+            <md:RequestedAttribute Name="omada_attribute"/>
+            <md:RequestedAttribute Name="username"/>
+            <md:RequestedAttribute Name="usergroup"/>
+        </md:AttributeConsumingService>
+    </md:SPSSODescriptor>
+    <md:ContactPerson contactType="administrative"/>
+</md:EntityDescriptor>

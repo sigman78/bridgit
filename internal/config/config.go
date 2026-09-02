@@ -24,6 +24,7 @@ type Settings struct {
 	SAMLCertificateFile string
 	SAMLKeyFile         string
 	SPMetadataFile      string
+	SAMLACSURL          string
 	SAMLRelayState      string
 	SAMLExtraAttributes map[string]string
 	SAMLGroupAllowlist  []string
@@ -79,6 +80,13 @@ func Load(lookup LookupEnv) (Settings, error) {
 		return Settings{}, err
 	}
 
+	settings.SAMLACSURL = optional(lookup, "BRIDGIT_SAML_ACS_URL", "")
+	if settings.SAMLACSURL != "" {
+		acsURL, parseErr := url.Parse(settings.SAMLACSURL)
+		if parseErr != nil || acsURL.Scheme != "https" || acsURL.Host == "" {
+			return Settings{}, errors.New("BRIDGIT_SAML_ACS_URL must be an absolute HTTPS URL")
+		}
+	}
 	settings.SAMLRelayState = optional(lookup, "BRIDGIT_SAML_RELAY_STATE", "")
 	settings.SAMLExtraAttributes, err = attributes(lookup, "BRIDGIT_SAML_EXTRA_ATTRIBUTES")
 	if err != nil {

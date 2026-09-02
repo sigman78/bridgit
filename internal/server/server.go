@@ -38,6 +38,9 @@ type Config struct {
 	// ExtraAttributes are constant assertion attributes that identify this
 	// bridge to the service provider, beside the per-user attributes.
 	ExtraAttributes map[string]string
+	// ACSURL, when set, overrides the assertion consumer service address the
+	// service-provider metadata advertises.
+	ACSURL string
 	// GroupAllowlist, when set, is the ordered set of groups this service
 	// provider accepts. The first entry the user holds becomes their single
 	// group; a user holding none is refused. Empty passes every group through.
@@ -66,7 +69,7 @@ func New(config Config, oidc *oidcclient.Client) (*Server, error) {
 	if config.SessionTTL <= 0 {
 		return nil, errors.New("session TTL must be positive")
 	}
-	registry, err := samlidp.NewRegistry(config.ServiceProviderMetadata)
+	registry, err := samlidp.NewRegistry(config.ServiceProviderMetadata, config.ACSURL)
 	if err != nil {
 		return nil, err
 	}
