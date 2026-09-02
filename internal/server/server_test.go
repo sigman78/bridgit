@@ -353,6 +353,50 @@ func TestTransactionCookieIsScopedAndClearedOnCompletion(t *testing.T) {
 	}
 }
 
+// The SessionIndex reaches the service provider inside the signed assertion and
+// is normally retained there, so it must never carry the browser's session
+// cookie, which would let anyone reading Omada's storage impersonate the user.
+func TestAssertionDoesNotDiscloseTheBrowserSessionCookie(t *testing.T) {
+	harness := authenticatedBridge(t)
+	request := httptest.NewRequest(http.MethodGet, harness.authenticationURL.String(), nil)
+	request.AddCookie(harness.cookie)
+	response := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("assertion status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+
+	encoded := hiddenFormValue(t, response.Body.String(), "SAMLResponse")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertion := string(decoded)
+	if strings.Contains(assertion, harness.cookie.Value) {
+		t.Error("assertion contains the browser session cookie value")
+	}
+	if strings.Contains(assertion, harness.transactionCookie.Value) {
+		t.Error("assertion contains the transaction binding secret")
+	}
+
+	sessionIndex := attributeValue(t, assertion, "SessionIndex")
+	if sessionIndex == "" {
+		t.Fatal("assertion has no SessionIndex")
+	}
+	if sessionIndex == harness.cookie.Value {
+		t.Error("SessionIndex is the browser session cookie value")
+	}
+}
+
+func attributeValue(t *testing.T, document, name string) string {
+	t.Helper()
+	match := regexp.MustCompile(name + `="([^"]*)"`).FindStringSubmatch(document)
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
 func TestOperationalEndpointsAndLocalLogout(t *testing.T) {
 	harness := authenticatedBridge(t)
 	for _, path := range []string{"/healthz", "/readyz"} {

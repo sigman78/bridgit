@@ -150,12 +150,20 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	// The service provider receives this value in every assertion and normally
+	// retains it, so it must not be the browser's session cookie.
+	samlSessionIndex, err := randomString(32)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	now := time.Now()
 	expiresAt := now.Add(s.sessionTTL)
 	if err := s.state.PutSession(sessionID, session.BridgeSession{
-		Principal: principal,
-		CreatedAt: now,
-		ExpiresAt: expiresAt,
+		Principal:        principal,
+		SAMLSessionIndex: samlSessionIndex,
+		CreatedAt:        now,
+		ExpiresAt:        expiresAt,
 	}); err != nil {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return
@@ -191,7 +199,7 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request, authnRequest
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 				return nil
 			}
-			return samlSession(cookie.Value, bridgeSession)
+			return samlSession(bridgeSession)
 		}
 	}
 	state, err := randomString(32)
@@ -262,17 +270,17 @@ func cookieSeconds(ttl time.Duration) int {
 	return seconds
 }
 
-func samlSession(id string, bridgeSession session.BridgeSession) *saml.Session {
+func samlSession(bridgeSession session.BridgeSession) *saml.Session {
 	principal := bridgeSession.Principal
 	groupValues := make([]saml.AttributeValue, 0, len(principal.Groups))
 	for _, group := range principal.Groups {
 		groupValues = append(groupValues, saml.AttributeValue{Type: "xs:string", Value: group})
 	}
 	return &saml.Session{
-		ID:           id,
+		ID:           bridgeSession.SAMLSessionIndex,
 		CreateTime:   bridgeSession.CreatedAt,
 		ExpireTime:   bridgeSession.ExpiresAt,
-		Index:        id,
+		Index:        bridgeSession.SAMLSessionIndex,
 		NameID:       principal.Subject,
 		NameIDFormat: string(saml.PersistentNameIDFormat),
 		CustomAttributes: []saml.Attribute{

@@ -39,3 +39,19 @@ func TestPutTransactionRequiresABrowserBinding(t *testing.T) {
 		t.Fatal("an unbound transaction was stored despite the error")
 	}
 }
+
+func TestPutSessionRequiresADistinctSAMLSessionIndex(t *testing.T) {
+	now := time.Now()
+	store := NewMemory(func() time.Time { return now })
+	expiresAt := now.Add(time.Hour)
+
+	if err := store.PutSession("cookie-value", BridgeSession{ExpiresAt: expiresAt}); err == nil {
+		t.Error("PutSession accepted a session with no SAML session index")
+	}
+	if err := store.PutSession("cookie-value", BridgeSession{SAMLSessionIndex: "cookie-value", ExpiresAt: expiresAt}); err == nil {
+		t.Error("PutSession accepted a SAML session index equal to the session ID")
+	}
+	if err := store.PutSession("cookie-value", BridgeSession{SAMLSessionIndex: "index-value", ExpiresAt: expiresAt}); err != nil {
+		t.Errorf("PutSession rejected a well-formed session: %v", err)
+	}
+}
