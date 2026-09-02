@@ -1,0 +1,11 @@
+/bridgit
+/bridgit.exe
+/.tools/
+*.test
+/bridgit.env
+/saml.key
+/saml.crt
+/bridgit-idp-metadata.xml
+/omada-sp-metadata.xml
+/live-idp-metadata.xml
+/running-idp-metadata.xml
