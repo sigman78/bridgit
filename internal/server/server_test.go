@@ -206,9 +206,10 @@ func TestAuthenticatedPrincipalBecomesVerifiableOmadaAssertion(t *testing.T) {
 	upstream.PKCEChallenge = authorizationURL.Query().Get("code_challenge")
 
 	callbackRequest := httptest.NewRequest(http.MethodGet, "https://bridge.example.test/oidc/callback?state="+url.QueryEscape(authorizationURL.Query().Get("state"))+"&code=authorization-code", nil)
+	callbackRequest.AddCookie(namedCookie(t, startResponse.Result().Cookies(), transactionCookieName))
 	callbackResponse := httptest.NewRecorder()
 	bridge.ServeHTTP(callbackResponse, callbackRequest)
-	cookie := callbackResponse.Result().Cookies()[0]
+	cookie := namedCookie(t, callbackResponse.Result().Cookies(), sessionCookieName)
 
 	resumeRequest := httptest.NewRequest(http.MethodGet, authenticationURL.String(), nil)
 	resumeRequest.AddCookie(cookie)
@@ -276,10 +277,79 @@ func TestAuthenticatedSAMLRequestCannotIssueASecondAssertion(t *testing.T) {
 func TestOIDCStateCannotBeReused(t *testing.T) {
 	harness := authenticatedBridge(t)
 	request := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+	request.AddCookie(harness.transactionCookie)
 	response := httptest.NewRecorder()
 	harness.bridge.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("replayed callback status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+}
+
+func TestOIDCCallbackRequiresTheBrowserThatStartedTheTransaction(t *testing.T) {
+	for _, testCase := range []struct {
+		name   string
+		cookie *http.Cookie
+	}{
+		{name: "no transaction cookie"},
+		{name: "transaction cookie from another browser", cookie: &http.Cookie{Name: transactionCookieName, Value: "kAcSaEBOs2y2gVv6xhHRjKGMEGmZ4d2sVEBhIkNRkkY"}},
+		{name: "empty transaction cookie", cookie: &http.Cookie{Name: transactionCookieName, Value: ""}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			harness := unauthenticatedBridge(t)
+			request := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+			if testCase.cookie != nil {
+				request.AddCookie(testCase.cookie)
+			}
+			response := httptest.NewRecorder()
+			harness.bridge.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("callback status = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+			for _, cookie := range response.Result().Cookies() {
+				if cookie.Name == sessionCookieName && cookie.Value != "" {
+					t.Fatalf("callback established a session for a browser that did not start the login: %#v", cookie)
+				}
+			}
+		})
+	}
+}
+
+// A callback that is rejected for want of the binding cookie must not consume
+// the transaction, or an attacker could cancel somebody else's login.
+func TestRejectedCallbackLeavesTheTransactionUsable(t *testing.T) {
+	harness := unauthenticatedBridge(t)
+
+	unboundRequest := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+	unboundResponse := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(unboundResponse, unboundRequest)
+	if unboundResponse.Code != http.StatusBadRequest {
+		t.Fatalf("unbound callback status = %d, want %d", unboundResponse.Code, http.StatusBadRequest)
+	}
+
+	boundRequest := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+	boundRequest.AddCookie(harness.transactionCookie)
+	boundResponse := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(boundResponse, boundRequest)
+	if boundResponse.Code != http.StatusSeeOther {
+		t.Fatalf("bound callback status = %d, want %d; body=%s", boundResponse.Code, http.StatusSeeOther, boundResponse.Body.String())
+	}
+}
+
+func TestTransactionCookieIsScopedAndClearedOnCompletion(t *testing.T) {
+	harness := authenticatedBridge(t)
+	issued := harness.transactionCookie
+	if issued.Value == "" || !issued.HttpOnly || !issued.Secure || issued.Path != "/" || issued.SameSite != http.SameSiteLaxMode || issued.MaxAge < 1 {
+		t.Errorf("transaction cookie lacks the required __Host security properties: %#v", issued)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+	request.AddCookie(issued)
+	response := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(response, request)
+	cleared := namedCookie(t, response.Result().Cookies(), transactionCookieName)
+	if cleared.Value != "" || cleared.MaxAge != -1 {
+		t.Errorf("completed callback did not clear the transaction cookie: %#v", cleared)
 	}
 }
 
@@ -320,9 +390,12 @@ type authenticatedTestBridge struct {
 	authenticationURL *url.URL
 	cookie            *http.Cookie
 	callbackURL       string
+	transactionCookie *http.Cookie
 }
 
-func authenticatedBridge(t *testing.T) authenticatedTestBridge {
+// unauthenticatedBridge starts one login and stops at the OIDC redirect, so a
+// test can drive the callback itself.
+func unauthenticatedBridge(t *testing.T) authenticatedTestBridge {
 	t.Helper()
 	key, certificate := testKeyPair(t, "bridge.example.test")
 	serviceProvider := testServiceProvider(t)
@@ -362,19 +435,39 @@ func authenticatedBridge(t *testing.T) authenticatedTestBridge {
 	authorizationURL := mustURL(t, startResponse.Header().Get("Location"))
 	upstream.Nonce = authorizationURL.Query().Get("nonce")
 	upstream.PKCEChallenge = authorizationURL.Query().Get("code_challenge")
-	callbackURL := "https://bridge.example.test/oidc/callback?state=" + url.QueryEscape(authorizationURL.Query().Get("state")) + "&code=authorization-code"
-	callbackRequest := httptest.NewRequest(http.MethodGet, callbackURL, nil)
-	callbackResponse := httptest.NewRecorder()
-	bridge.ServeHTTP(callbackResponse, callbackRequest)
-	if callbackResponse.Code != http.StatusSeeOther {
-		t.Fatalf("callback status = %d, want %d", callbackResponse.Code, http.StatusSeeOther)
-	}
 	return authenticatedTestBridge{
 		bridge:            bridge,
 		authenticationURL: authenticationURL,
-		cookie:            callbackResponse.Result().Cookies()[0],
-		callbackURL:       callbackURL,
+		callbackURL:       "https://bridge.example.test/oidc/callback?state=" + url.QueryEscape(authorizationURL.Query().Get("state")) + "&code=authorization-code",
+		transactionCookie: namedCookie(t, startResponse.Result().Cookies(), transactionCookieName),
 	}
+}
+
+// authenticatedBridge additionally completes the callback, yielding a browser
+// that holds an established bridge session.
+func authenticatedBridge(t *testing.T) authenticatedTestBridge {
+	t.Helper()
+	harness := unauthenticatedBridge(t)
+	request := httptest.NewRequest(http.MethodGet, harness.callbackURL, nil)
+	request.AddCookie(harness.transactionCookie)
+	response := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(response, request)
+	if response.Code != http.StatusSeeOther {
+		t.Fatalf("callback status = %d, want %d; body=%s", response.Code, http.StatusSeeOther, response.Body.String())
+	}
+	harness.cookie = namedCookie(t, response.Result().Cookies(), sessionCookieName)
+	return harness
+}
+
+func namedCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
+	t.Helper()
+	for _, cookie := range cookies {
+		if cookie.Name == name {
+			return cookie
+		}
+	}
+	t.Fatalf("response did not set cookie %q", name)
+	return nil
 }
 
 func TestOIDCCallbackEstablishesSessionAndResumesSAMLRequest(t *testing.T) {
@@ -420,6 +513,7 @@ func TestOIDCCallbackEstablishesSessionAndResumesSAMLRequest(t *testing.T) {
 
 	callbackURL := "https://bridge.example.test/oidc/callback?state=" + url.QueryEscape(authorizationURL.Query().Get("state")) + "&code=authorization-code"
 	callbackRequest := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	callbackRequest.AddCookie(namedCookie(t, startResponse.Result().Cookies(), transactionCookieName))
 	callbackResponse := httptest.NewRecorder()
 	bridge.ServeHTTP(callbackResponse, callbackRequest)
 
@@ -429,12 +523,8 @@ func TestOIDCCallbackEstablishesSessionAndResumesSAMLRequest(t *testing.T) {
 	if got, want := callbackResponse.Header().Get("Location"), authenticationURL.RequestURI(); got != want {
 		t.Errorf("callback location = %q, want original SAML request %q", got, want)
 	}
-	cookies := callbackResponse.Result().Cookies()
-	if len(cookies) != 1 {
-		t.Fatalf("callback cookies = %d, want 1", len(cookies))
-	}
-	cookie := cookies[0]
-	if cookie.Name != "__Host-bridgit_session" || cookie.Value == "" || !cookie.HttpOnly || !cookie.Secure || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
+	cookie := namedCookie(t, callbackResponse.Result().Cookies(), sessionCookieName)
+	if cookie.Value == "" || !cookie.HttpOnly || !cookie.Secure || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
 		t.Errorf("session cookie does not have the required opaque __Host security properties: %#v", cookie)
 	}
 }

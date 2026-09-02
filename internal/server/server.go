@@ -3,6 +3,8 @@ package server
 import (
 	"crypto"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/base64"
 	"errors"
@@ -16,7 +18,11 @@ import (
 	"github.com/sigman78/bridgit/internal/session"
 )
 
-const oidcCallbackPath = "/oidc/callback"
+const (
+	oidcCallbackPath      = "/oidc/callback"
+	sessionCookieName     = "__Host-bridgit_session"
+	transactionCookieName = "__Host-bridgit_txn"
+)
 
 // Config contains the already-loaded protocol configuration for the HTTP app.
 type Config struct {
@@ -96,11 +102,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if cookie, err := r.Cookie("__Host-bridgit_session"); err == nil {
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		s.state.DeleteSession(cookie.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "__Host-bridgit_session",
+		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -116,8 +122,21 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
+	// Resolve the browser binding before consuming the transaction, so that a
+	// request from a browser which never started this login cannot burn it.
+	binding, err := r.Cookie(transactionCookieName)
+	if err != nil || binding.Value == "" {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	transaction, err := s.state.TakeTransaction(r.URL.Query().Get("state"))
+	clearTransactionCookie(w)
 	if err != nil {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
+	presented := sha256.Sum256([]byte(binding.Value))
+	if subtle.ConstantTimeCompare(presented[:], transaction.BindingHash[:]) != 1 {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
@@ -142,7 +161,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "__Host-bridgit_session",
+		Name:     sessionCookieName,
 		Value:    sessionID,
 		Path:     "/",
 		Expires:  expiresAt,
@@ -166,7 +185,7 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request, authnRequest
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return nil
 	}
-	if cookie, err := r.Cookie("__Host-bridgit_session"); err == nil {
+	if cookie, err := r.Cookie(sessionCookieName); err == nil {
 		if bridgeSession, ok := s.state.GetSession(cookie.Value); ok {
 			if !s.state.UseSAMLRequest(authnRequest.Request.ID, time.Now().Add(saml.MaxIssueDelay)) {
 				http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
@@ -190,17 +209,57 @@ func (s *Server) GetSession(w http.ResponseWriter, r *http.Request, authnRequest
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return nil
 	}
+	bindingSecret, err := randomString(32)
+	if err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return nil
+	}
 	if err := s.state.PutTransaction(state, session.Transaction{
 		ReturnURL:    r.URL.RequestURI(),
 		Nonce:        nonce,
 		PKCEVerifier: pkceVerifier,
+		BindingHash:  sha256.Sum256([]byte(bindingSecret)),
 		ExpiresAt:    time.Now().Add(s.transactionTTL),
 	}); err != nil {
 		http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
 		return nil
 	}
+	// Only the browser holding this secret may complete the transaction. A
+	// second login started in the same browser replaces it, abandoning the
+	// first; that is the same outcome the single-use transaction already had.
+	http.SetCookie(w, &http.Cookie{
+		Name:     transactionCookieName,
+		Value:    bindingSecret,
+		Path:     "/",
+		MaxAge:   cookieSeconds(s.transactionTTL),
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
 	http.Redirect(w, r, s.oidc.AuthorizationURL(state, nonce, pkceVerifier), http.StatusFound)
 	return nil
+}
+
+func clearTransactionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     transactionCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// cookieSeconds converts a TTL to a Max-Age, never rounding a positive lifetime
+// down to zero, which would make the cookie last for the whole browser session.
+func cookieSeconds(ttl time.Duration) int {
+	seconds := int(ttl / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 func samlSession(id string, bridgeSession session.BridgeSession) *saml.Session {

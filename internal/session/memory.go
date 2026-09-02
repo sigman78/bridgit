@@ -1,6 +1,7 @@
 package session
 
 import (
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"time"
@@ -15,11 +16,15 @@ const (
 	maxSAMLRequestIDs      = 8192
 )
 
-// Transaction is a single-use continuation between SAML and OIDC.
+// Transaction is a single-use continuation between SAML and OIDC. BindingHash
+// ties it to one browser: only a request presenting the matching binding secret
+// may complete it, which prevents an attacker from planting their own
+// authorization response in somebody else's browser.
 type Transaction struct {
 	ReturnURL    string
 	Nonce        string
 	PKCEVerifier string
+	BindingHash  [sha256.Size]byte
 	ExpiresAt    time.Time
 }
 
@@ -127,6 +132,9 @@ func (m *Memory) PutTransaction(state string, transaction Transaction) error {
 	m.removeExpiredTransactionsLocked()
 	if state == "" || !transaction.ExpiresAt.After(m.now()) {
 		return errors.New("transaction state and future expiry are required")
+	}
+	if transaction.BindingHash == ([sha256.Size]byte{}) {
+		return errors.New("transaction browser binding is required")
 	}
 	if _, exists := m.transactions[state]; !exists && len(m.transactions) >= MaxPendingTransactions {
 		return errors.New("pending transaction capacity reached")
