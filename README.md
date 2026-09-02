@@ -15,7 +15,7 @@ Bridgit is an OIDC relying party toward Pocket ID and a SAML identity provider t
 - `preferred_username` mapped to Omada's `username` attribute.
 - `groups` mapped to Omada's multi-valued `usergroup_name` attribute.
 - Bounded, expiring, in-memory transactions and sessions.
-- Single-use OAuth state and SAML request replay protection.
+- Single-use, browser-bound OAuth state and SAML request replay protection.
 - Local logout, liveness, readiness, server timeouts, and graceful shutdown.
 
 This first version is intentionally single-process. Restarting Bridgit invalidates browser sessions and in-flight logins but does not disturb Omada trust as long as the SAML keypair is persistent.
@@ -123,7 +123,8 @@ Endpoints:
 
 ## Security and limitations
 
-- HTTPS termination is mandatory for browser use because the session cookie is always `Secure` and uses the `__Host-` prefix.
+- HTTPS termination is mandatory for browser use because Bridgit's cookies are always `Secure` and use the `__Host-` prefix.
+- An authorization transaction can only be completed by the browser that started it. Bridgit issues a short-lived `__Host-bridgit_txn` cookie alongside the redirect to Pocket ID and requires it at the callback, so a captured `state`/`code` pair cannot be replayed into somebody else's browser.
 - SP metadata is a trust allowlist, not merely descriptive configuration. Review it and supply it as a local file; Bridgit never fetches arbitrary metadata URLs.
 - The signing key, OIDC client secret, authorization codes, tokens, SAML payloads, and claims must not be logged.
 - Only one SP is configured in the MVP.
