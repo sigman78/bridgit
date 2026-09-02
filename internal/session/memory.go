@@ -29,10 +29,13 @@ type Transaction struct {
 }
 
 // BridgeSession is a server-side reference to a verified principal.
+// SAMLSessionIndex is disclosed to the service provider in every assertion, so
+// it is generated independently of the browser cookie that names this session.
 type BridgeSession struct {
-	Principal identity.Principal
-	CreatedAt time.Time
-	ExpiresAt time.Time
+	Principal        identity.Principal
+	SAMLSessionIndex string
+	CreatedAt        time.Time
+	ExpiresAt        time.Time
 }
 
 // Memory stores bounded-lifetime browser state for a single Bridgit process.
@@ -101,6 +104,9 @@ func (m *Memory) PutSession(id string, bridgeSession BridgeSession) error {
 	m.removeExpiredSessionsLocked()
 	if id == "" || !bridgeSession.ExpiresAt.After(m.now()) {
 		return errors.New("session ID and future expiry are required")
+	}
+	if bridgeSession.SAMLSessionIndex == "" || bridgeSession.SAMLSessionIndex == id {
+		return errors.New("SAML session index must be present and distinct from the session ID")
 	}
 	if _, exists := m.sessions[id]; !exists && len(m.sessions) >= maxBridgeSessions {
 		return errors.New("bridge session capacity reached")

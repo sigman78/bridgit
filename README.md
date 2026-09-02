@@ -125,6 +125,7 @@ Endpoints:
 
 - HTTPS termination is mandatory for browser use because Bridgit's cookies are always `Secure` and use the `__Host-` prefix.
 - An authorization transaction can only be completed by the browser that started it. Bridgit issues a short-lived `__Host-bridgit_txn` cookie alongside the redirect to Pocket ID and requires it at the callback, so a captured `state`/`code` pair cannot be replayed into somebody else's browser.
+- The browser session cookie is never disclosed to a service provider. The SAML `SessionIndex` is an independent random value, so an assertion retained by Omada cannot be replayed against Bridgit.
 - SP metadata is a trust allowlist, not merely descriptive configuration. Review it and supply it as a local file; Bridgit never fetches arbitrary metadata URLs.
 - The signing key, OIDC client secret, authorization codes, tokens, SAML payloads, and claims must not be logged.
 - Only one SP is configured in the MVP.
