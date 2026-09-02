@@ -388,6 +388,15 @@ func TestAssertionDoesNotDiscloseTheBrowserSessionCookie(t *testing.T) {
 	}
 }
 
+func nameIDFormat(t *testing.T, document string) string {
+	t.Helper()
+	match := regexp.MustCompile(`<saml:NameID[^>]*\sFormat="([^"]*)"`).FindStringSubmatch(document)
+	if match == nil {
+		return ""
+	}
+	return match[1]
+}
+
 func attributeValue(t *testing.T, document, name string) string {
 	t.Helper()
 	match := regexp.MustCompile(name + `="([^"]*)"`).FindStringSubmatch(document)
@@ -395,6 +404,41 @@ func attributeValue(t *testing.T, document, name string) string {
 		return ""
 	}
 	return match[1]
+}
+
+// A service provider validates assertions against the metadata it imported, so
+// the advertised name-identifier format and the emitted one must not drift.
+func TestMetadataNameIDFormatMatchesTheIssuedAssertion(t *testing.T) {
+	harness := authenticatedBridge(t)
+
+	metadata := fetchIDPMetadata(t, harness.bridge)
+	if len(metadata.IDPSSODescriptors) != 1 {
+		t.Fatalf("IdP descriptors = %d, want 1", len(metadata.IDPSSODescriptors))
+	}
+	advertised := metadata.IDPSSODescriptors[0].NameIDFormats
+	if len(advertised) != 1 {
+		t.Fatalf("advertised NameIDFormats = %v, want exactly one", advertised)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, harness.authenticationURL.String(), nil)
+	request.AddCookie(harness.cookie)
+	response := httptest.NewRecorder()
+	harness.bridge.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("assertion status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	decoded, err := base64.StdEncoding.DecodeString(hiddenFormValue(t, response.Body.String(), "SAMLResponse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	emitted := nameIDFormat(t, string(decoded))
+	if emitted == "" {
+		t.Fatal("assertion NameID has no Format attribute")
+	}
+	if emitted != string(advertised[0]) {
+		t.Errorf("assertion NameID Format = %q, but metadata advertises %q", emitted, advertised[0])
+	}
 }
 
 func TestOperationalEndpointsAndLocalLogout(t *testing.T) {

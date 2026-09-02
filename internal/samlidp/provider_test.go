@@ -56,6 +56,11 @@ func TestMetadataPublishesConfiguredIdentityProvider(t *testing.T) {
 	}
 
 	descriptor := metadata.IDPSSODescriptors[0]
+	// A service provider trusts metadata over observed behaviour, so the
+	// advertised name-identifier format has to be the one assertions carry.
+	if len(descriptor.NameIDFormats) != 1 || descriptor.NameIDFormats[0] != saml.PersistentNameIDFormat {
+		t.Errorf("metadata NameIDFormats = %v, want only %q", descriptor.NameIDFormats, saml.PersistentNameIDFormat)
+	}
 	if !hasEndpoint(descriptor.SingleSignOnServices, saml.HTTPRedirectBinding, "https://bridge.example.test/saml/sso") {
 		t.Error("metadata does not publish the HTTP-Redirect SSO endpoint")
 	}

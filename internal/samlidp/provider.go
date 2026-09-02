@@ -85,6 +85,8 @@ func (p *Provider) MetadataXML() ([]byte, error) {
 	return append([]byte(xml.Header), metadata...), nil
 }
 
+// metadata narrows the library's generic descriptor to what Bridgit actually
+// does: HTTP-Redirect SSO only, and persistent name identifiers only.
 func (p *Provider) metadata() *saml.EntityDescriptor {
 	metadata := p.idp.Metadata()
 	for descriptorIndex := range metadata.IDPSSODescriptors {
@@ -96,6 +98,7 @@ func (p *Provider) metadata() *saml.EntityDescriptor {
 			}
 		}
 		metadata.IDPSSODescriptors[descriptorIndex].SingleSignOnServices = redirectOnly
+		metadata.IDPSSODescriptors[descriptorIndex].NameIDFormats = []saml.NameIDFormat{saml.PersistentNameIDFormat}
 	}
 	return metadata
 }
